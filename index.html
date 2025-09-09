@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>2048 Snake - Многоуровневая игра</title>
+    
+    <!-- Подключение Яндекс Игры SDK -->
+    <script src="/sdk.js"></script>
+    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&display=swap');
         
@@ -593,8 +597,8 @@
                     <li>Управляйте змейкой с помощью стрелок или свайпов</li>
                     <li>Собирайте яблоки, чтобы расти и набирать очки</li>
                     <li>Занимайте все свободные клетки, чтобы победить</li>
+                    <li>Избегайте столкновений с препятствиями</li>
                     <li>Проходите уровни последовательно</li>
-                    <li>Игра заканчивается, когда змейка врезается в себя или в стену</li>
                 </ul>
             </div>
             <button class="start-button" id="start-button">Начать игру</button>
@@ -659,41 +663,507 @@
         let cellSize = 40;
         let board = [];
         let snake = [];
-        let snakeGrid = []; // Матрица для отслеживания клеток змейки
+        let snakeGrid = [];
+        let obstacles = [];
+        let obstacleGrid = [];
         let direction = 'right';
         let nextDirection = 'right';
         let score = 0;
         let bestScore = localStorage.getItem('bestScore') || 0;
         let gameRunning = false;
         let gamePaused = false;
-        let gameSpeed = 300;
-        let gameInterval;
+        let gameSpeed = 400; // Скорость движения змейки
+        let animationSpeed = 50; // Скорость анимации между клетками
+        let gameInterval = null;
+        let animationInterval = null;
         let currentLevel = 1;
         let maxUnlockedLevel = parseInt(localStorage.getItem('maxUnlockedLevel')) || 1;
         let canvas, ctx;
+        let moveProgress = 0; // Прогресс перемещения (0-1)
+        let headMoveProgress = 0; // Прогресс перемещения головы (0-1)
+        let targetPositions = []; // Целевые позиции для анимации
+        let isMoving = false; // Флаг движения змейки
+        let pendingAppleCheck = false; // Флаг для проверки яблока после анимации
+        let pendingVictoryCheck = false; // Флаг для проверки победы после анимации
+        let inputBuffer = []; // Буфер для хранения нажатий
         
-        // Конфигурация уровней с четными размерами поля
+        // Переменные для Яндекс Игр SDK
+        let ysdk = null;
+        let player = null;
+        
+        // Конфигурация уровней с заданными препятствиями
         const levelConfig = [
-            { level: 1, gridSize: 4, speed: 500 },
-            { level: 2, gridSize: 4, speed: 400 },
-            { level: 3, gridSize: 4, speed: 300 },
-            { level: 4, gridSize: 4, speed: 270 },
-            { level: 5, gridSize: 4, speed: 250 },
-            { level: 6, gridSize: 6, speed: 500 },
-            { level: 7, gridSize: 6, speed: 450 },
-            { level: 8, gridSize: 6, speed: 300 },
-            { level: 9, gridSize: 6, speed: 270 },
-            { level: 10, gridSize: 6, speed: 250 },
-            { level: 11, gridSize: 8, speed: 500 },
-            { level: 12, gridSize: 8, speed: 400 },
-            { level: 13, gridSize: 8, speed: 300 },
-            { level: 14, gridSize: 8, speed: 270 },
-            { level: 15, gridSize: 8, speed: 250 },
-            { level: 16, gridSize: 10, speed: 500 },
-            { level: 17, gridSize: 10, speed: 400 },
-            { level: 18, gridSize: 10, speed: 300 },
-            { level: 19, gridSize: 10, speed: 270 },
-            { level: 20, gridSize: 10, speed: 250 }
+            { 
+                level: 1, 
+                gridSize: 4, 
+                obstacles: [] // Уровень 1 без препятствий
+            },
+            { 
+                level: 2, 
+                gridSize: 4, 
+                obstacles: [
+                    { row: 1, col: 1 } // Препятствие в центре
+                ] 
+            },
+            { 
+                level: 3, 
+                gridSize: 4, 
+                obstacles: [
+                    { row: 0, col: 2 },
+                    { row: 2, col: 1 }
+                ] 
+            },
+            { 
+                level: 4, 
+                gridSize: 4, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 3 },
+                    { row: 3, col: 0 }
+                ] 
+            },
+            { 
+                level: 5, 
+                gridSize: 4, 
+                obstacles: [
+                    { row: 1, col: 1 },
+                    { row: 1, col: 2 },
+                    { row: 2, col: 1 },
+                    { row: 2, col: 2 }
+                ] 
+            },
+            { 
+                level: 6, 
+                gridSize: 6, 
+                obstacles: [
+                    { row: 1, col: 1 },
+                    { row: 1, col: 4 },
+                    { row: 4, col: 1 }
+                ] 
+            },
+            { 
+                level: 7, 
+                gridSize: 6, 
+                obstacles: [
+                    { row: 0, col: 2 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 4 },
+                    { row: 2, col: 0 },
+                    { row: 4, col: 3 },
+                    { row: 5, col: 5 }
+                ] 
+            },
+            { 
+                level: 8, 
+                gridSize: 6, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 5 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 3 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 3 },
+                    { row: 5, col: 0 },
+                    { row: 5, col: 5 },
+                    { row: 1, col: 1 }
+                ] 
+            },
+            { 
+                level: 9, 
+                gridSize: 6, 
+                obstacles: [
+                    { row: 0, col: 1 },
+                    { row: 0, col: 4 },
+                    { row: 1, col: 0 },
+                    { row: 1, col: 5 },
+                    { row: 4, col: 0 },
+                    { row: 4, col: 5 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 4 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 3 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 3 }
+                ] 
+            },
+            { 
+                level: 10, 
+                gridSize: 6, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 2 },
+                    { row: 0, col: 4 },
+                    { row: 2, col: 0 },
+                    { row: 2, col: 5 },
+                    { row: 3, col: 0 },
+                    { row: 3, col: 5 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 3 },
+                    { row: 5, col: 5 },
+                    { row: 1, col: 2 },
+                    { row: 1, col: 3 },
+                    { row: 4, col: 2 },
+                    { row: 4, col: 3 },
+                    { row: 2, col: 2 }
+                ] 
+            },
+            { 
+                level: 11, 
+                gridSize: 8, 
+                obstacles: [
+                    { row: 1, col: 1 },
+                    { row: 1, col: 6 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 4 },
+                    { row: 6, col: 1 },
+                    { row: 6, col: 6 },
+                    { row: 2, col: 2 },
+                    { row: 5, col: 5 }
+                ] 
+            },
+            { 
+                level: 12, 
+                gridSize: 8, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 7 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 6 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 5 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 4 },
+                    { row: 4, col: 3 },
+                    { row: 4, col: 4 },
+                    { row: 5, col: 2 },
+                    { row: 5, col: 5 },
+                    { row: 6, col: 1 },
+                    { row: 6, col: 6 },
+                    { row: 7, col: 0 },
+                    { row: 7, col: 7 }
+                ] 
+            },
+            { 
+                level: 13, 
+                gridSize: 8, 
+                obstacles: [
+                    { row: 0, col: 2 },
+                    { row: 0, col: 5 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 6 },
+                    { row: 2, col: 0 },
+                    { row: 2, col: 3 },
+                    { row: 2, col: 4 },
+                    { row: 2, col: 7 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 5 },
+                    { row: 4, col: 2 },
+                    { row: 4, col: 5 },
+                    { row: 5, col: 0 },
+                    { row: 5, col: 3 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 7 },
+                    { row: 6, col: 1 },
+                    { row: 6, col: 6 },
+                    { row: 7, col: 2 },
+                    { row: 7, col: 5 },
+                    { row: 3, col: 1 },
+                    { row: 3, col: 6 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 6 }
+                ] 
+            },
+            { 
+                level: 14, 
+                gridSize: 8, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 2 },
+                    { row: 0, col: 4 },
+                    { row: 0, col: 6 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 3 },
+                    { row: 1, col: 5 },
+                    { row: 1, col: 7 },
+                    { row: 2, col: 0 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 4 },
+                    { row: 2, col: 6 },
+                    { row: 3, col: 1 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 5 },
+                    { row: 3, col: 7 },
+                    { row: 4, col: 0 },
+                    { row: 4, col: 2 },
+                    { row: 4, col: 4 },
+                    { row: 4, col: 6 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 3 },
+                    { row: 5, col: 5 },
+                    { row: 5, col: 7 },
+                    { row: 6, col: 0 },
+                    { row: 6, col: 2 },
+                    { row: 6, col: 4 },
+                    { row: 6, col: 6 },
+                    { row: 7, col: 1 },
+                    { row: 7, col: 3 },
+                    { row: 7, col: 5 },
+                    { row: 7, col: 7 }
+                ] 
+            },
+            { 
+                level: 15, 
+                gridSize: 8, 
+                obstacles: [
+                    { row: 0, col: 1 },
+                    { row: 0, col: 3 },
+                    { row: 0, col: 5 },
+                    { row: 1, col: 0 },
+                    { row: 1, col: 2 },
+                    { row: 1, col: 4 },
+                    { row: 1, col: 6 },
+                    { row: 2, col: 1 },
+                    { row: 2, col: 3 },
+                    { row: 2, col: 5 },
+                    { row: 2, col: 7 },
+                    { row: 3, col: 0 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 4 },
+                    { row: 3, col: 6 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 3 },
+                    { row: 4, col: 5 },
+                    { row: 4, col: 7 },
+                    { row: 5, col: 0 },
+                    { row: 5, col: 2 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 6 },
+                    { row: 6, col: 1 },
+                    { row: 6, col: 3 },
+                    { row: 6, col: 5 },
+                    { row: 7, col: 2 },
+                    { row: 7, col: 4 },
+                    { row: 7, col: 6 },
+                    { row: 0, col: 7 },
+                    { row: 6, col: 0 },
+                    { row: 6, col: 7 },
+                    { row: 7, col: 0 },
+                    { row: 7, col: 1 },
+                    { row: 7, col: 7 }
+                ] 
+            },
+            { 
+                level: 16, 
+                gridSize: 10, 
+                obstacles: [
+                    { row: 1, col: 1 },
+                    { row: 1, col: 8 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 6 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 5 },
+                    { row: 8, col: 1 },
+                    { row: 8, col: 8 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 7 },
+                    { row: 7, col: 2 },
+                    { row: 7, col: 7 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 8 },
+                    { row: 1, col: 4 },
+                    { row: 1, col: 5 }
+                ] 
+            },
+            { 
+                level: 17, 
+                gridSize: 10, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 9 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 8 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 7 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 6 },
+                    { row: 4, col: 4 },
+                    { row: 4, col: 5 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 5 },
+                    { row: 6, col: 3 },
+                    { row: 6, col: 6 },
+                    { row: 7, col: 2 },
+                    { row: 7, col: 7 },
+                    { row: 8, col: 1 },
+                    { row: 8, col: 8 },
+                    { row: 9, col: 0 },
+                    { row: 9, col: 9 },
+                    { row: 1, col: 4 },
+                    { row: 1, col: 5 },
+                    { row: 8, col: 4 },
+                    { row: 8, col: 5 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 8 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 8 }
+                ] 
+            },
+            { 
+                level: 18, 
+                gridSize: 10, 
+                obstacles: [
+                    { row: 0, col: 2 },
+                    { row: 0, col: 7 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 8 },
+                    { row: 2, col: 0 },
+                    { row: 2, col: 3 },
+                    { row: 2, col: 6 },
+                    { row: 2, col: 9 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 7 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 4 },
+                    { row: 4, col: 5 },
+                    { row: 4, col: 8 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 5 },
+                    { row: 5, col: 8 },
+                    { row: 6, col: 2 },
+                    { row: 6, col: 7 },
+                    { row: 7, col: 0 },
+                    { row: 7, col: 3 },
+                    { row: 7, col: 6 },
+                    { row: 7, col: 9 },
+                    { row: 8, col: 1 },
+                    { row: 8, col: 8 },
+                    { row: 9, col: 2 },
+                    { row: 9, col: 7 },
+                    { row: 3, col: 4 },
+                    { row: 3, col: 5 },
+                    { row: 6, col: 4 },
+                    { row: 6, col: 5 },
+                    { row: 1, col: 4 },
+                    { row: 1, col: 5 },
+                    { row: 8, col: 4 },
+                    { row: 8, col: 5 }
+                ] 
+            },
+            { 
+                level: 19, 
+                gridSize: 10, 
+                obstacles: [
+                    { row: 0, col: 0 },
+                    { row: 0, col: 2 },
+                    { row: 0, col: 4 },
+                    { row: 0, col: 6 },
+                    { row: 0, col: 8 },
+                    { row: 1, col: 1 },
+                    { row: 1, col: 3 },
+                    { row: 1, col: 5 },
+                    { row: 1, col: 7 },
+                    { row: 1, col: 9 },
+                    { row: 2, col: 0 },
+                    { row: 2, col: 2 },
+                    { row: 2, col: 4 },
+                    { row: 2, col: 6 },
+                    { row: 2, col: 8 },
+                    { row: 3, col: 1 },
+                    { row: 3, col: 3 },
+                    { row: 3, col: 5 },
+                    { row: 3, col: 7 },
+                    { row: 3, col: 9 },
+                    { row: 4, col: 0 },
+                    { row: 4, col: 2 },
+                    { row: 4, col: 4 },
+                    { row: 4, col: 6 },
+                    { row: 4, col: 8 },
+                    { row: 5, col: 1 },
+                    { row: 5, col: 3 },
+                    { row: 5, col: 5 },
+                    { row: 5, col: 7 },
+                    { row: 5, col: 9 },
+                    { row: 6, col: 0 },
+                    { row: 6, col: 2 },
+                    { row: 6, col: 4 },
+                    { row: 6, col: 6 },
+                    { row: 6, col: 8 },
+                    { row: 7, col: 1 },
+                    { row: 7, col: 3 },
+                    { row: 7, col: 5 },
+                    { row: 7, col: 7 },
+                    { row: 7, col: 9 },
+                    { row: 8, col: 0 },
+                    { row: 8, col: 2 },
+                    { row: 8, col: 4 },
+                    { row: 8, col: 6 },
+                    { row: 8, col: 8 },
+                    { row: 9, col: 1 },
+                    { row: 9, col: 3 },
+                    { row: 9, col: 5 },
+                    { row: 9, col: 7 }
+                ] 
+            },
+            { 
+                level: 20, 
+                gridSize: 10, 
+                obstacles: [
+                    { row: 0, col: 1 },
+                    { row: 0, col: 3 },
+                    { row: 0, col: 5 },
+                    { row: 0, col: 7 },
+                    { row: 1, col: 0 },
+                    { row: 1, col: 2 },
+                    { row: 1, col: 4 },
+                    { row: 1, col: 6 },
+                    { row: 1, col: 8 },
+                    { row: 2, col: 1 },
+                    { row: 2, col: 3 },
+                    { row: 2, col: 5 },
+                    { row: 2, col: 7 },
+                    { row: 2, col: 9 },
+                    { row: 3, col: 0 },
+                    { row: 3, col: 2 },
+                    { row: 3, col: 4 },
+                    { row: 3, col: 6 },
+                    { row: 3, col: 8 },
+                    { row: 4, col: 1 },
+                    { row: 4, col: 3 },
+                    { row: 4, col: 5 },
+                    { row: 4, col: 7 },
+                    { row: 4, col: 9 },
+                    { row: 5, col: 0 },
+                    { row: 5, col: 2 },
+                    { row: 5, col: 4 },
+                    { row: 5, col: 6 },
+                    { row: 5, col: 8 },
+                    { row: 6, col: 1 },
+                    { row: 6, col: 3 },
+                    { row: 6, col: 5 },
+                    { row: 6, col: 7 },
+                    { row: 6, col: 9 },
+                    { row: 7, col: 0 },
+                    { row: 7, col: 2 },
+                    { row: 7, col: 4 },
+                    { row: 7, col: 6 },
+                    { row: 7, col: 8 },
+                    { row: 8, col: 1 },
+                    { row: 8, col: 3 },
+                    { row: 8, col: 5 },
+                    { row: 8, col: 7 },
+                    { row: 9, col: 2 },
+                    { row: 9, col: 4 },
+                    { row: 9, col: 6 },
+                    { row: 9, col: 8 },
+                    { row: 0, col: 9 },
+                    { row: 9, col: 0 },
+                    { row: 9, col: 9 },
+                    { row: 0, col: 0 },
+                    { row: 3, col: 9 },
+                    { row: 6, col: 0 }
+                ] 
+            }
         ];
         
         // DOM элементы
@@ -729,6 +1199,95 @@
             loadingPercentage = document.getElementById('loading-percentage');
         }
         
+        // Инициализация Яндекс Игр SDK
+        function initYandexSDK() {
+            YaGames
+                .init()
+                .then(_ysdk => {
+                    ysdk = _ysdk;
+                    console.log('Yandex SDK initialized');
+                    
+                    // Получаем данные игрока
+                    return ysdk.getPlayer();
+                })
+                .then(_player => {
+                    player = _player;
+                    console.log('Player initialized', player);
+                    
+                    // Загружаем прогресс игрока
+                    loadPlayerProgress();
+                })
+                .catch(err => {
+                    console.error('Error initializing Yandex SDK:', err);
+                    // Если SDK не удалось инициализировать, продолжаем работу без него
+                    initLoadingScreen();
+                });
+        }
+        
+        // Загрузка прогресса игрока
+        function loadPlayerProgress() {
+            if (player) {
+                player.getData(['maxUnlockedLevel', 'bestScore'])
+                    .then(data => {
+                        if (data.maxUnlockedLevel) {
+                            maxUnlockedLevel = data.maxUnlockedLevel;
+                        }
+                        if (data.bestScore) {
+                            bestScore = data.bestScore;
+                        }
+                        console.log('Player data loaded:', data);
+                        
+                        // После загрузки данных инициализируем загрузочный экран
+                        initLoadingScreen();
+                    })
+                    .catch(err => {
+                        console.error('Error loading player data:', err);
+                        initLoadingScreen();
+                    });
+            } else {
+                initLoadingScreen();
+            }
+        }
+        
+        // Сохранение прогресса игрока
+        function savePlayerProgress() {
+            if (player) {
+                player.setData({
+                    maxUnlockedLevel: maxUnlockedLevel,
+                    bestScore: bestScore
+                })
+                .then(() => {
+                    console.log('Player data saved');
+                })
+                .catch(err => {
+                    console.error('Error saving player data:', err);
+                });
+            } else {
+                // Сохраняем в localStorage как запасной вариант
+                localStorage.setItem('maxUnlockedLevel', maxUnlockedLevel);
+                localStorage.setItem('bestScore', bestScore);
+            }
+        }
+        
+        // Показ рекламы
+        function showAd() {
+            if (ysdk) {
+                ysdk.adv.showFullscreenAdv({
+                    callbacks: {
+                        onClose: () => {
+                            console.log('Ad closed');
+                        },
+                        onError: (e) => {
+                            console.error('Ad error:', e);
+                        },
+                        onOffline: () => {
+                            console.log('Ad offline');
+                        }
+                    }
+                });
+            }
+        }
+        
         // Инициализация обработчиков событий
         function initEventListeners() {
             startButton.addEventListener('click', () => {
@@ -751,10 +1310,12 @@
             });
             
             restartModalButton.addEventListener('click', () => {
+                showAd(); // Показываем рекламу перед перезапуском
                 initGame();
             });
             
             nextLevelButton.addEventListener('click', () => {
+                showAd(); // Показываем рекламу перед переходом на следующий уровень
                 if (currentLevel < 20) {
                     startLevel(currentLevel + 1);
                 }
@@ -778,22 +1339,29 @@
                     if (!gameRunning) return;
                     
                     const dir = btn.getAttribute('data-direction');
-                    switch (dir) {
-                        case 'up':
-                            if (direction !== 'down') nextDirection = 'up';
-                            break;
-                        case 'down':
-                            if (direction !== 'up') nextDirection = 'down';
-                            break;
-                        case 'left':
-                            if (direction !== 'right') nextDirection = 'left';
-                            break;
-                        case 'right':
-                            if (direction !== 'left') nextDirection = 'right';
-                            break;
-                    }
+                    bufferInput(dir);
                 });
             });
+        }
+        
+        // Буферизация ввода для улучшения управления
+        function bufferInput(dir) {
+            // Проверяем, что направление не противоположно текущему
+            if (
+                (dir === 'up' && direction !== 'down') ||
+                (dir === 'down' && direction !== 'up') ||
+                (dir === 'left' && direction !== 'right') ||
+                (dir === 'right' && direction !== 'left')
+            ) {
+                // Добавляем направление в буфер, если его там еще нет
+                if (!inputBuffer.includes(dir)) {
+                    inputBuffer.push(dir);
+                    // Ограничиваем размер буфера до 3 элементов
+                    if (inputBuffer.length > 3) {
+                        inputBuffer.shift();
+                    }
+                }
+            }
         }
         
         // Инициализация загрузочного экрана
@@ -840,7 +1408,10 @@
         // Создание игрового поля
         function createGrid() {
             canvas = document.getElementById('game-canvas');
+            if (!canvas) return;
+            
             ctx = canvas.getContext('2d');
+            if (!ctx) return;
             
             // Устанавливаем размеры canvas
             const boardSize = Math.min(gameBoard.clientWidth, gameBoard.clientHeight);
@@ -866,13 +1437,42 @@
                     snakeGrid[row][col] = false;
                 }
             }
+            
+            // Инициализация матрицы препятствий
+            obstacleGrid = [];
+            for (let row = 0; row < gridSize; row++) {
+                obstacleGrid[row] = [];
+                for (let col = 0; col < gridSize; col++) {
+                    obstacleGrid[row][col] = false;
+                }
+            }
+        }
+        
+        // Генерация препятствий из конфигурации уровня
+        function generateObstacles() {
+            const config = levelConfig[currentLevel - 1];
+            obstacles = [];
+            
+            // Очищаем матрицу препятствий
+            for (let row = 0; row < gridSize; row++) {
+                for (let col = 0; col < gridSize; col++) {
+                    obstacleGrid[row][col] = false;
+                }
+            }
+            
+            // Размещаем препятствия из конфигурации
+            for (const obstacle of config.obstacles) {
+                if (obstacle.row < gridSize && obstacle.col < gridSize) {
+                    obstacleGrid[obstacle.row][obstacle.col] = true;
+                    obstacles.push({ row: obstacle.row, col: obstacle.col });
+                }
+            }
         }
         
         // Инициализация игры для уровня
         function initGame() {
             const config = levelConfig[currentLevel - 1];
             gridSize = config.gridSize;
-            gameSpeed = config.speed;
             
             createGrid();
             
@@ -893,11 +1493,23 @@
                 }
             ];
             
+            // Инициализация целевых позиций
+            targetPositions = snake.map(segment => ({
+                x: segment.x,
+                y: segment.y
+            }));
+            
             direction = 'right';
             nextDirection = 'right';
             score = 0;
             gameRunning = true;
             gamePaused = false;
+            moveProgress = 0;
+            headMoveProgress = 0;
+            isMoving = false;
+            pendingAppleCheck = false;
+            pendingVictoryCheck = false;
+            inputBuffer = [];
             
             scoreElement.textContent = score;
             currentLevelElement.textContent = currentLevel;
@@ -907,6 +1519,9 @@
             // Обновляем матрицу змейки
             updateSnakeGrid();
             
+            // Генерируем препятствия
+            generateObstacles();
+            
             // Добавляем начальные яблоки
             addRandomApple();
             addRandomApple();
@@ -915,9 +1530,19 @@
             // Отображаем змейку
             drawGame();
             
-            // Запускаем игровой цикл с правильной скоростью
-            if (gameInterval) clearInterval(gameInterval);
+            // Очищаем предыдущие интервалы
+            if (gameInterval !== null) {
+                clearInterval(gameInterval);
+                gameInterval = null;
+            }
+            if (animationInterval !== null) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
+            
+            // Устанавливаем интервалы
             gameInterval = setInterval(gameLoop, gameSpeed);
+            animationInterval = setInterval(animateSnake, animationSpeed);
         }
         
         // Обновление матрицы змейки
@@ -949,15 +1574,68 @@
         
         // Игровой цикл
         function gameLoop() {
-            if (!gameRunning || gamePaused) return;
+            if (!gameRunning || gamePaused || isMoving) return;
+            
+            // Применяем следующее направление из буфера, если есть
+            if (inputBuffer.length > 0) {
+                nextDirection = inputBuffer.shift();
+            }
             
             direction = nextDirection;
-            moveSnake();
+            moveSnakeLogic();
+        }
+        
+        // Анимация змейки
+        function animateSnake() {
+            if (!gameRunning || gamePaused) return;
+            
+            // Если змейка движется, увеличиваем прогресс
+            if (isMoving) {
+                moveProgress += animationSpeed / gameSpeed;
+                headMoveProgress += (animationSpeed / gameSpeed) * 1.8; // Голова движется в 1.8 раза быстрее
+                
+                if (headMoveProgress > 1) {
+                    headMoveProgress = 1; // Ограничиваем голову
+                }
+                
+                if (moveProgress >= 1) {
+                    moveProgress = 1;
+                    headMoveProgress = 1;
+                    isMoving = false;
+                    
+                    // После завершения анимации проверяем флаги
+                    if (pendingAppleCheck) {
+                        checkApple();
+                        pendingAppleCheck = false;
+                    }
+                    
+                    if (pendingVictoryCheck) {
+                        checkVictory();
+                        pendingVictoryCheck = false;
+                    }
+                }
+            }
+            
+            // Интерполируем позиции сегментов змейки
+            // Голова движется быстрее
+            const head = snake[0];
+            const headTarget = targetPositions[0];
+            head.x = head.x + (headTarget.x - head.x) * headMoveProgress;
+            head.y = head.y + (headTarget.y - head.y) * headMoveProgress;
+            
+            // Остальные сегменты двигаются с обычной скоростью
+            for (let i = 1; i < snake.length; i++) {
+                const segment = snake[i];
+                const target = targetPositions[i];
+                segment.x = segment.x + (target.x - segment.x) * moveProgress;
+                segment.y = segment.y + (target.y - segment.y) * moveProgress;
+            }
+            
             drawGame();
         }
         
-        // Перемещение змейки
-        function moveSnake() {
+        // Логика перемещения змейки
+        function moveSnakeLogic() {
             const head = { ...snake[0] };
             
             // Определяем новое положение головы
@@ -975,10 +1653,18 @@
                 return;
             }
             
-            // Проверка столкновения с самой собой
+            // Проверка столкновения с препятствиями
             const headCellX = Math.floor(head.targetX / cellSize);
             const headCellY = Math.floor(head.targetY / cellSize);
             
+            if (headCellX >= 0 && headCellX < gridSize && 
+                headCellY >= 0 && headCellY < gridSize && 
+                obstacleGrid[headCellY][headCellX]) {
+                gameOver();
+                return;
+            }
+            
+            // Проверка столкновения с самой собой
             if (headCellX >= 0 && headCellX < gridSize && 
                 headCellY >= 0 && headCellY < gridSize && 
                 snakeGrid[headCellY][headCellX]) {
@@ -986,15 +1672,63 @@
                 return;
             }
             
+            // Обновляем целевые позиции для анимации
+            targetPositions = [];
+            for (let i = 0; i < snake.length; i++) {
+                targetPositions.push({
+                    x: snake[i].targetX,
+                    y: snake[i].targetY
+                });
+            }
+            
             // Добавляем новую голову
             snake.unshift(head);
+            targetPositions.unshift({ x: head.targetX, y: head.targetY });
             
-            // Проверяем, съела ли змейка яблоко
+            // Обновляем матрицу змейки для новой головы
+            const newHeadCellX = Math.floor(head.targetX / cellSize);
+            const newHeadCellY = Math.floor(head.targetY / cellSize);
+            if (newHeadCellX >= 0 && newHeadCellX < gridSize && 
+                newHeadCellY >= 0 && newHeadCellY < gridSize) {
+                snakeGrid[newHeadCellY][newHeadCellX] = true;
+            }
+            
+            // Проверяем, есть ли яблоко в новой клетке
             const cellX = Math.floor(head.targetX / cellSize);
             const cellY = Math.floor(head.targetY / cellSize);
             const hasApple = board[cellY] && board[cellY][cellX] !== null;
             
             if (hasApple) {
+                // Змейка съела яблоко, но не удаляем его сразу
+                // Устанавливаем флаг для проверки после анимации
+                pendingAppleCheck = true;
+            } else {
+                // Змейка не съела яблоко, удаляем хвост
+                const tail = snake.pop();
+                targetPositions.pop();
+                
+                // Обновляем матрицу змейки для хвоста
+                const tailCellX = Math.floor(tail.targetX / cellSize);
+                const tailCellY = Math.floor(tail.targetY / cellSize);
+                if (tailCellX >= 0 && tailCellX < gridSize && 
+                    tailCellY >= 0 && tailCellY < gridSize) {
+                    snakeGrid[tailCellY][tailCellX] = false;
+                }
+            }
+            
+            // Начинаем анимацию движения
+            isMoving = true;
+            moveProgress = 0;
+            headMoveProgress = 0;
+        }
+        
+        // Проверка яблока после анимации
+        function checkApple() {
+            const head = snake[0];
+            const cellX = Math.floor(head.targetX / cellSize);
+            const cellY = Math.floor(head.targetY / cellSize);
+            
+            if (board[cellY] && board[cellY][cellX] !== null) {
                 // Змейка съела яблоко
                 score += 10;
                 scoreElement.textContent = score;
@@ -1005,21 +1739,9 @@
                 // Добавляем новое яблоко
                 addRandomApple();
                 
-                // Проверяем победу
-                checkVictory();
-            } else {
-                // Змейка не съела яблоко, удаляем хвост
-                snake.pop();
+                // Устанавливаем флаг для проверки победы
+                pendingVictoryCheck = true;
             }
-            
-            // Обновляем позиции всех сегментов змейки
-            for (let i = 0; i < snake.length; i++) {
-                snake[i].x = snake[i].targetX;
-                snake[i].y = snake[i].targetY;
-            }
-            
-            // Обновляем матрицу змейки
-            updateSnakeGrid();
         }
         
         // Добавление случайного яблока
@@ -1028,8 +1750,8 @@
             
             for (let row = 0; row < gridSize; row++) {
                 for (let col = 0; col < gridSize; col++) {
-                    // Проверяем, что клетка свободна и не занята змейкой
-                    if (board[row][col] === null && !snakeGrid[row][col]) {
+                    // Проверяем, что клетка свободна и не занята змейкой или препятствием
+                    if (board[row][col] === null && !snakeGrid[row][col] && !obstacleGrid[row][col]) {
                         emptyCells.push({ row, col });
                     }
                 }
@@ -1043,11 +1765,16 @@
         
         // Отрисовка игры
         function drawGame() {
+            if (!ctx) return;
+            
             // Очищаем canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
             // Рисуем сетку
             drawGrid();
+            
+            // Рисуем препятствия
+            drawObstacles();
             
             // Рисуем яблоки
             drawApples();
@@ -1058,6 +1785,8 @@
         
         // Отрисовка сетки
         function drawGrid() {
+            if (!ctx) return;
+            
             ctx.strokeStyle = 'rgba(0, 153, 255, 0.1)';
             ctx.lineWidth = 1;
             
@@ -1078,8 +1807,44 @@
             }
         }
         
+        // Отрисовка препятствий
+        function drawObstacles() {
+            if (!ctx) return;
+            
+            for (let row = 0; row < gridSize; row++) {
+                for (let col = 0; col < gridSize; col++) {
+                    if (obstacleGrid[row][col]) {
+                        const x = col * cellSize + cellSize / 2;
+                        const y = row * cellSize + cellSize / 2;
+                        const size = cellSize * 0.8;
+                        
+                        // Рисуем препятствие как квадрат
+                        ctx.fillStyle = '#ff5555';
+                        ctx.fillRect(x - size/2, y - size/2, size, size);
+                        
+                        // Добавляем рамку
+                        ctx.strokeStyle = '#ff0000';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(x - size/2, y - size/2, size, size);
+                        
+                        // Добавляем крестик
+                        ctx.beginPath();
+                        ctx.moveTo(x - size/3, y - size/3);
+                        ctx.lineTo(x + size/3, y + size/3);
+                        ctx.moveTo(x + size/3, y - size/3);
+                        ctx.lineTo(x - size/3, y + size/3);
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+        
         // Отрисовка яблок
         function drawApples() {
+            if (!ctx) return;
+            
             for (let row = 0; row < gridSize; row++) {
                 for (let col = 0; col < gridSize; col++) {
                     if (board[row][col]) {
@@ -1118,58 +1883,61 @@
             }
         }
         
-        // Отрисовка змейки
+        // Отрисовка змейки без торчков при повороте
         function drawSnake() {
-            if (snake.length === 0) return;
+            if (!ctx || snake.length === 0) return;
             
-            // Рисуем тело змейки как монолитную фигуру
+            // Рисуем тело змейки как плавную линию
             ctx.beginPath();
             
-            // Начинаем с хвоста
-            const tail = snake[snake.length - 1];
-            ctx.moveTo(tail.x, tail.y);
+            // Начинаем с головы
+            const head = snake[0];
+            ctx.moveTo(head.x, head.y);
             
             // Рисуем кривую через все сегменты змейки
-            for (let i = snake.length - 2; i > 0; i--) {
+            for (let i = 1; i < snake.length; i++) {
                 const segment = snake[i];
-                const nextSegment = snake[i + 1];
+                const prevSegment = snake[i - 1];
                 
                 // Контрольные точки для кривой Безье
-                const cp1x = segment.x + (nextSegment.x - segment.x) * 0.3;
-                const cp1y = segment.y + (nextSegment.y - segment.y) * 0.3;
-                const cp2x = segment.x - (nextSegment.x - segment.x) * 0.3;
-                const cp2y = segment.y - (nextSegment.y - segment.y) * 0.3;
+                const cp1x = prevSegment.x + (segment.x - prevSegment.x) * 0.5;
+                const cp1y = prevSegment.y + (segment.y - prevSegment.y) * 0.5;
+                const cp2x = segment.x + (prevSegment.x - segment.x) * 0.5;
+                const cp2y = segment.y + (prevSegment.y - segment.y) * 0.5;
                 
                 ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, segment.x, segment.y);
             }
-            
-            // Завершаем головой
-            const head = snake[0];
-            const neck = snake[1];
-            
-            // Контрольные точки для кривой Безье к голове
-            const cp1x = neck.x + (head.x - neck.x) * 0.3;
-            const cp1y = neck.y + (head.y - neck.y) * 0.3;
-            const cp2x = neck.x - (head.x - neck.x) * 0.3;
-            const cp2y = neck.y - (head.y - neck.y) * 0.3;
-            
-            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, head.x, head.y);
             
             // Задаем толщину и стиль змейки
             ctx.lineWidth = cellSize * 0.8;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
             
-            // Однородный цвет для тела змейки (без градиента)
-            ctx.strokeStyle = '#00ffcc';
+            // Градиент для тела змейки
+            const gradient = ctx.createLinearGradient(
+                snake[0].x, snake[0].y,
+                snake[snake.length - 1].x, snake[snake.length - 1].y
+            );
+            gradient.addColorStop(0, '#ffffff');
+            gradient.addColorStop(0.2, '#00ffcc');
+            gradient.addColorStop(1, '#0099ff');
+            
+            ctx.strokeStyle = gradient;
             ctx.stroke();
             
             // Рисуем голову змейки поверх тела
             ctx.beginPath();
             ctx.arc(head.x, head.y, cellSize * 0.45, 0, Math.PI * 2);
             
-            // Однородный цвет для головы
-            ctx.fillStyle = '#ffffff';
+            // Градиент для головы
+            const headGradient = ctx.createRadialGradient(
+                head.x, head.y, 0,
+                head.x, head.y, cellSize * 0.45
+            );
+            headGradient.addColorStop(0, '#ffffff');
+            headGradient.addColorStop(1, '#00ffcc');
+            
+            ctx.fillStyle = headGradient;
             ctx.fill();
             
             // Глаза
@@ -1230,26 +1998,33 @@
             ctx.fill();
         }
         
-        // Проверка победы
+        // Проверка победы - змейка должна заполнить ВСЕ клетки поля
         function checkVictory() {
-            // Считаем количество уникальных клеток, занятых змейкой
-            const occupiedCells = new Set();
-            for (const segment of snake) {
-                const cellX = Math.floor(segment.targetX / cellSize);
-                const cellY = Math.floor(segment.targetY / cellSize);
-                occupiedCells.add(`${cellX},${cellY}`);
+            // Проверяем, что змейка занимает все клетки поля
+            for (let row = 0; row < gridSize; row++) {
+                for (let col = 0; col < gridSize; col++) {
+                    // Если нашли хотя бы одну клетку, не занятую змейкой - не победа
+                    if (!snakeGrid[row][col]) {
+                        return;
+                    }
+                }
             }
             
-            // Победа, если занято 100% клеток
-            if (occupiedCells.size >= gridSize * gridSize) {
-                victory();
-            }
+            // Если дошли сюда, значит все клетки заняты змейкой - победа!
+            victory();
         }
         
         // Обработка победы
         function victory() {
             gameRunning = false;
-            if (gameInterval) clearInterval(gameInterval);
+            if (gameInterval !== null) {
+                clearInterval(gameInterval);
+                gameInterval = null;
+            }
+            if (animationInterval !== null) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
             
             victoryScoreElement.textContent = score;
             victoryModal.style.display = 'flex';
@@ -1257,13 +2032,13 @@
             // Обновляем рекорд
             if (score > bestScore) {
                 bestScore = score;
-                localStorage.setItem('bestScore', bestScore);
+                savePlayerProgress();
             }
             
             // Открываем следующий уровень
             if (currentLevel === maxUnlockedLevel && currentLevel < 20) {
                 maxUnlockedLevel++;
-                localStorage.setItem('maxUnlockedLevel', maxUnlockedLevel);
+                savePlayerProgress();
             }
             
             // Скрываем кнопку "Следующий уровень", если это последний уровень
@@ -1277,7 +2052,14 @@
         // Обработка окончания игры
         function gameOver() {
             gameRunning = false;
-            if (gameInterval) clearInterval(gameInterval);
+            if (gameInterval !== null) {
+                clearInterval(gameInterval);
+                gameInterval = null;
+            }
+            if (animationInterval !== null) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
             
             finalScoreElement.textContent = score;
             gameOverModal.style.display = 'flex';
@@ -1285,7 +2067,7 @@
             // Обновляем рекорд
             if (score > bestScore) {
                 bestScore = score;
-                localStorage.setItem('bestScore', bestScore);
+                savePlayerProgress();
             }
         }
         
@@ -1295,19 +2077,19 @@
             
             switch (e.key) {
                 case 'ArrowUp':
-                    if (direction !== 'down') nextDirection = 'up';
+                    bufferInput('up');
                     e.preventDefault();
                     break;
                 case 'ArrowDown':
-                    if (direction !== 'up') nextDirection = 'down';
+                    bufferInput('down');
                     e.preventDefault();
                     break;
                 case 'ArrowLeft':
-                    if (direction !== 'right') nextDirection = 'left';
+                    bufferInput('left');
                     e.preventDefault();
                     break;
                 case 'ArrowRight':
-                    if (direction !== 'left') nextDirection = 'right';
+                    bufferInput('right');
                     e.preventDefault();
                     break;
                 case ' ':
@@ -1339,17 +2121,17 @@
             
             if (Math.abs(dx) > Math.abs(dy)) {
                 // Горизонтальный свайп
-                if (dx > 0 && direction !== 'left') {
-                    nextDirection = 'right';
-                } else if (dx < 0 && direction !== 'right') {
-                    nextDirection = 'left';
+                if (dx > 0) {
+                    bufferInput('right');
+                } else {
+                    bufferInput('left');
                 }
             } else {
                 // Вертикальный свайп
-                if (dy > 0 && direction !== 'up') {
-                    nextDirection = 'down';
-                } else if (dy < 0 && direction !== 'down') {
-                    nextDirection = 'up';
+                if (dy > 0) {
+                    bufferInput('down');
+                } else {
+                    bufferInput('up');
                 }
             }
         });
@@ -1362,10 +2144,46 @@
             pauseButton.textContent = gamePaused ? '▶' : '⏸';
         }
         
+        // Адаптация размера canvas под размер экрана
+        function resizeCanvas() {
+            if (!canvas || !gameRunning) return;
+            
+            const boardSize = Math.min(gameBoard.clientWidth, gameBoard.clientHeight);
+            canvas.width = boardSize;
+            canvas.height = boardSize;
+            
+            // Пересчитываем размер клетки
+            cellSize = boardSize / gridSize;
+            
+            // Обновляем позиции змейки
+            for (let i = 0; i < snake.length; i++) {
+                const segment = snake[i];
+                const cellX = Math.floor(segment.x / cellSize);
+                const cellY = Math.floor(segment.y / cellSize);
+                segment.x = cellX * cellSize + cellSize / 2;
+                segment.y = cellY * cellSize + cellSize / 2;
+                segment.targetX = segment.x;
+                segment.targetY = segment.y;
+            }
+            
+            // Обновляем целевые позиции
+            targetPositions = snake.map(segment => ({
+                x: segment.x,
+                y: segment.y
+            }));
+            
+            // Перерисовываем игру
+            drawGame();
+        }
+        
+        // Добавляем обработчик изменения размера окна
+        window.addEventListener('resize', resizeCanvas);
+        
         // Инициализация при загрузке страницы
         document.addEventListener('DOMContentLoaded', () => {
             initDOMElements();
-            initLoadingScreen();
+            // Инициализируем Яндекс Игр SDK
+            initYandexSDK();
         });
     </script>
 </body>
